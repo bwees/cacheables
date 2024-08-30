@@ -1,3 +1,5 @@
+import MemoryConnector from "./connectors/memory_connector"
+
 //region Types
 export type CacheOptions = {
   /**
@@ -12,6 +14,10 @@ export type CacheOptions = {
    * Enable/disable timings
    */
   logTiming?: boolean
+  /**
+   * Enable/disable timings
+   */
+  cacheConnector?: CacheConnector
 }
 
 type CacheOnlyCachePolicy = {
@@ -48,22 +54,35 @@ export type CacheableOptions =
 
 //endregion
 
+//region CacheConnector
+/**
+ * Provides an interface to create custom cache connectors
+ */
+export interface CacheConnector {
+  get(key: string): Cacheable<any> | undefined
+  set(key: string, data: Cacheable<any>): void
+  delete(key: string): void
+  clear(): void
+  keys(): string[]
+}
+
 //region Cacheables
 /**
- * Provides a simple in-memory cache with automatic or manual invalidation.
+ * Provides a cache with automatic or manual invalidation use the provided 
+ * connector in CacheOptions, otherwise defaults to an in-memeory cache
  */
 export class Cacheables {
   enabled: boolean
   log: boolean
   logTiming: boolean
+  connector: CacheConnector
 
   constructor(options?: CacheOptions) {
     this.enabled = options?.enabled ?? true
     this.log = options?.log ?? false
     this.logTiming = options?.logTiming ?? false
+    this.connector = options?.cacheConnector ?? new MemoryConnector()
   }
-
-  #cacheables: Record<string, Cacheable<any>> = {}
 
   /**
    * Builds a key with the provided strings or numbers.
@@ -78,28 +97,28 @@ export class Cacheables {
    * @param key
    */
   delete(key: string): void {
-    delete this.#cacheables[key]
+    this.connector.delete(key)
   }
 
   /**
    * Clears the cache by deleting all cacheables.
    */
   clear(): void {
-    this.#cacheables = {}
+    this.connector.clear()
   }
 
   /**
    * Returns whether a cacheable is present and valid (i.e., did not time out).
    */
   isCached(key: string): boolean {
-    return !!this.#cacheables[key]
+    return !!this.connector.get(key)
   }
 
   /**
    * Returns all the cache keys
    */
   keys(): string[] {
-    return Object.keys(this.#cacheables)
+    return this.connector.keys()
   }
 
   /**
@@ -139,7 +158,7 @@ export class Cacheables {
     const result = await this.#cacheable(resource, key, options)
 
     if (logTiming) Logger.logTimeEnd(logId)
-    if (log) Logger.logStats(key, this.#cacheables[key])
+    if (log) Logger.logStats(key, this.connector.get(key))
 
     return result
   }
@@ -149,11 +168,11 @@ export class Cacheables {
     key: string,
     options?: CacheableOptions,
   ): Promise<T> {
-    let cacheable = this.#cacheables[key] as Cacheable<T> | undefined
+    let cacheable = this.connector.get(key) as Cacheable<T> | undefined
 
     if (!cacheable) {
       cacheable = new Cacheable()
-      this.#cacheables[key] = cacheable
+      this.connector.set(key, cacheable)
     }
 
     return cacheable.touch(resource, options)
@@ -166,7 +185,7 @@ export class Cacheables {
  * Helper class, can only be instantiated by calling its static
  * function `create`.
  */
-class Cacheable<T> {
+export class Cacheable<T> {
   hits = 0
   #lastFetch = 0
   #initialized = false
